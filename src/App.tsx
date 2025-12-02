@@ -11,14 +11,12 @@ import {
   Calendar,
   ArrowRight,
   BarChart3,
-  Share2,
   Zap,
   CheckCircle2,
   AlertCircle,
   Target,
   DollarSign,
   Ghost,
-  PieChart,
   Download,
   CalendarCheck,
 } from 'lucide-react';
@@ -73,164 +71,279 @@ interface AnalyticsData {
   };
 }
 
-// --- Mock Data Generators ---
+// --- Twitter API integration ---
 
-const generateRandomData = (seed: string): AnalyticsData => {
-  let val = 0;
-  for (let i = 0; i < seed.length; i++) val += seed.charCodeAt(i);
+interface TwitterApiUser {
+  userName: string;
+  name: string;
+  followers: number;
+  following: number;
+  statusesCount: number;
+  description: string;
+  location: string;
+  createdAt: string;
+  profilePicture: string;
+}
 
-  const rand = () => {
-    val = (val * 1664525 + 1013904223) % 4294967296;
-    return val / 4294967296;
+interface TwitterApiTweet {
+  id: string;
+  text: string;
+  likeCount: number;
+  retweetCount: number;
+  replyCount: number;
+  quoteCount: number;
+  viewCount: number;
+  createdAt: string;
+  lang: string;
+  author: TwitterApiUser;
+  entities?: {
+    hashtags?: { text: string }[];
   };
+}
 
-  const baseFollowers = Math.floor(rand() * 50000) + 500;
-  const isInfluencer = rand() > 0.8;
-  const multiplier = isInfluencer ? 100 : 1;
-  const totalFollowers = baseFollowers * multiplier;
-
-  const profile: ProfileData = {
-    handle: `@${seed}`,
-    name: seed.charAt(0).toUpperCase() + seed.slice(1),
-    followers: totalFollowers,
-    following: Math.floor(rand() * 2000),
-    tweetsCount: Math.floor(rand() * 15000),
-    joinedDate: `Joined ${
-      ['January', 'March', 'May', 'August', 'December'][Math.floor(rand() * 5)]
-    } ${2010 + Math.floor(rand() * 14)}`,
-    bio: isInfluencer
-      ? 'Tech enthusiast 🚀 | Building the future | #Crypto #AI'
-      : 'Just sharing my thoughts on the internet. ☕️',
-    avatarColor: [
-      'bg-blue-500',
-      'bg-green-500',
-      'bg-purple-500',
-      'bg-yellow-500',
-      'bg-red-500',
-    ][Math.floor(rand() * 5)],
+interface TwitterApiResponse {
+  status: string;
+  code: number;
+  msg?: string;
+  data?: {
+    tweets: TwitterApiTweet[];
   };
+}
 
-  // Generate Growth History (30 days)
-  const growthHistory: { date: string; followers: number }[] = [];
-  let currentFollowers = totalFollowers - Math.floor(rand() * 1000 * multiplier);
+const HERO_THRESHOLD = 0.04;
+const ZOMBIE_THRESHOLD = 0.005;
+const AVATAR_COLORS = ['bg-blue-500', 'bg-green-500', 'bg-purple-500', 'bg-yellow-500', 'bg-red-500'];
 
-  for (let i = 29; i >= 0; i--) {
-    const date = new Date();
-    date.setDate(date.getDate() - i);
-    const change = Math.floor((rand() - 0.3) * 50 * multiplier);
-    currentFollowers += change;
-    growthHistory.push({
-      date: date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-      followers: currentFollowers,
-    });
+const sanitizeHandle = (raw: string) => raw.replace(/^@/, '').trim();
+
+const relativeTimeFromNow = (timestamp: string) => {
+  const created = new Date(timestamp);
+  const diffMs = Date.now() - created.getTime();
+  const minute = 60 * 1000;
+  const hour = 60 * minute;
+  const day = 24 * hour;
+
+  if (diffMs < hour) {
+    return `${Math.max(1, Math.floor(diffMs / minute))}m ago`;
   }
 
-  // Generate Recent Tweets with Type Classification (Hero/Zombie)
-  const recentTweets: Tweet[] = [];
-  const templates = [
-    'Just launched a new feature! 🚀 Check it out.',
-    'The weather is amazing today. ☀️',
-    'Analysis of the current market trends shows interesting patterns. 📊',
-    "Can't believe it's already Friday! #weekendvibes",
-    'Working on something big. Stay tuned.',
-    'Why is coffee so good? ☕️',
-    'Big news coming soon... 👀',
-    'Learning React is fun but challenging.',
-  ];
+  if (diffMs < day) {
+    return `${Math.max(1, Math.floor(diffMs / hour))}h ago`;
+  }
 
-  let totalImpressions = 0;
+  return created.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+};
 
-  for (let i = 0; i < 8; i++) {
-    const impressions = Math.floor(rand() * 5000 * multiplier) + 500;
-    const engagementRatio = rand() * 0.05 + 0.001;
-    const totalEngagements = Math.floor(impressions * engagementRatio);
+const extractHashtags = (text: string) =>
+  Array.from(new Set((text.match(/#[a-zA-Z0-9_]+/g) ?? []).map((tag) => tag.toLowerCase())));
 
-    let type: 'Hero' | 'Regular' | 'Zombie' = 'Regular';
-    if (engagementRatio > 0.04) type = 'Hero';
-    if (engagementRatio < 0.005) type = 'Zombie';
+const buildGrowthHistory = (followers: number, tweets: TwitterApiTweet[]) => {
+  const totalDays = 30;
+  const now = Date.now();
+  const dayBuckets = Array.from({ length: totalDays }, (_, idx) => ({
+    date: new Date(now - (totalDays - idx - 1) * 24 * 60 * 60 * 1000),
+    score: 0,
+  }));
 
-    recentTweets.push({
-      id: `tweet-${i}`,
-      content: templates[Math.floor(rand() * templates.length)],
-      likes: Math.floor(totalEngagements * 0.7),
-      retweets: Math.floor(totalEngagements * 0.2),
-      replies: Math.floor(totalEngagements * 0.1),
-      impressions,
-      date: `${Math.floor(rand() * 24)}h ago`,
+  tweets.forEach((tweet) => {
+    const created = new Date(tweet.createdAt).getTime();
+    const diffDays = Math.floor((now - created) / (24 * 60 * 60 * 1000));
+    const bucketIndex = totalDays - diffDays - 1;
+
+    if (bucketIndex >= 0 && bucketIndex < totalDays) {
+      dayBuckets[bucketIndex].score += tweet.viewCount ?? 0;
+    }
+  });
+
+  const maxScore = dayBuckets.reduce((max, bucket) => Math.max(max, bucket.score), 1);
+  const floorFollowers = Math.max(100, Math.round(followers * 0.92));
+
+  return dayBuckets.map((bucket, idx) => {
+    const progress = idx / (totalDays - 1 || 1);
+    const variance = bucket.score / maxScore;
+    const modeledFollowers = Math.round(
+      floorFollowers + progress * (followers - floorFollowers) + variance * followers * 0.02,
+    );
+
+    return {
+      date: bucket.date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+      followers: modeledFollowers,
+    };
+  });
+};
+
+const buildInsights = ({
+  heroShare,
+  wastedPotential,
+  engagementRate,
+  ghostFollowers,
+}: {
+  heroShare: number;
+  wastedPotential: number;
+  engagementRate: number;
+  ghostFollowers: number;
+}): OptimizationInsight[] => [
+  {
+    category: 'Content Quality',
+    score: Math.min(100, Math.round(heroShare * 2 + engagementRate * 10)),
+    status: heroShare > 20 ? 'Excellent' : heroShare > 12 ? 'Good' : 'Needs Improvement',
+    tips: [
+      'Double down on formats that consistently hit Hero status.',
+      'Thread high-performing ideas for longer dwell time.',
+      'Lead with a hook in the first 120 characters.',
+    ],
+    icon: MessageCircle,
+  },
+  {
+    category: 'Reach Efficiency',
+    score: Math.max(40, Math.round(100 - wastedPotential * 1.2)),
+    status: wastedPotential < 20 ? 'Excellent' : wastedPotential < 35 ? 'Good' : 'Needs Improvement',
+    tips: [
+      'Archive or remix Zombie posts to avoid feeding the algorithm low-signal content.',
+      'Ship during the two highest engagement windows from your analytics.',
+      'Quote-tweet your Hero posts 12-18h later to extend shelf life.',
+    ],
+    icon: Zap,
+  },
+  {
+    category: 'Audience Health',
+    score: Math.max(40, Math.round(100 - ghostFollowers)),
+    status: ghostFollowers < 15 ? 'Excellent' : ghostFollowers < 30 ? 'Good' : 'Needs Improvement',
+    tips: [
+      'Run a short DM welcome flow for new followers once per week.',
+      'Host a poll/thread that invites responses from dormant accounts.',
+      'Manually remove obvious spam followers each Friday.',
+    ],
+    icon: Target,
+  },
+];
+
+const transformTwitterData = (tweets: TwitterApiTweet[]): AnalyticsData => {
+  const trimmedTweets = tweets.slice(0, 12);
+  const author = trimmedTweets[0]?.author;
+
+  if (!author) {
+    throw new Error('Unable to resolve author data from the Twitter API response.');
+  }
+
+  const recentTweets: Tweet[] = trimmedTweets.map((tweet) => {
+    const totalEngagements = tweet.likeCount + tweet.retweetCount + tweet.replyCount;
+    const engagementRatio = tweet.viewCount ? totalEngagements / tweet.viewCount : 0;
+    let type: Tweet['type'] = 'Regular';
+
+    if (engagementRatio >= HERO_THRESHOLD) type = 'Hero';
+    if (engagementRatio <= ZOMBIE_THRESHOLD) type = 'Zombie';
+
+    return {
+      id: tweet.id,
+      content: tweet.text,
+      likes: tweet.likeCount,
+      retweets: tweet.retweetCount,
+      replies: tweet.replyCount,
+      impressions: tweet.viewCount ?? 0,
+      date: relativeTimeFromNow(tweet.createdAt),
       type,
+    };
+  });
+
+  const totalLikes = recentTweets.reduce((sum, t) => sum + t.likes, 0);
+  const totalRetweets = recentTweets.reduce((sum, t) => sum + t.retweets, 0);
+  const totalReplies = recentTweets.reduce((sum, t) => sum + t.replies, 0);
+  const totalImpressions = recentTweets.reduce((sum, t) => sum + t.impressions, 0);
+
+  const engagementRate = totalImpressions
+    ? ((totalLikes + totalRetweets + totalReplies) / totalImpressions) * 100
+    : 0;
+
+  const heroShare =
+    (recentTweets.filter((tweet) => tweet.type === 'Hero').length / recentTweets.length) * 100;
+  const wastedPotential =
+    (recentTweets.filter((tweet) => tweet.type === 'Zombie').length / recentTweets.length) * 100;
+
+  const hashtagCounts = new Map<string, number>();
+  recentTweets.forEach((tweet) => {
+    extractHashtags(tweet.content).forEach((tag) => {
+      hashtagCounts.set(tag, (hashtagCounts.get(tag) ?? 0) + 1);
     });
+  });
+  const topHashtags = Array.from(hashtagCounts.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 3)
+    .map(([tag]) => tag);
 
-    totalImpressions += impressions;
-  }
-
-  const totalLikes = recentTweets.reduce((acc, t) => acc + t.likes, 0);
-  const totalRetweets = recentTweets.reduce((acc, t) => acc + t.retweets, 0);
-  const engagementRate =
-    ((totalLikes +
-      totalRetweets +
-      recentTweets.reduce((acc, t) => acc + t.replies, 0)) /
-      totalImpressions) *
-    100;
-
-  const wastedPotential = Math.floor(rand() * 30) + 10;
-  const ghostFollowers = Math.floor(rand() * 25) + 5;
-  const heroContent = Math.floor(rand() * 15) + 5;
-
-  const emv = (totalImpressions / 1000) * 5.5 * 30;
-
-  const insights: OptimizationInsight[] = [
-    {
-      category: 'Content Quality',
-      score: Math.floor(rand() * 40) + 60,
-      status: 'Good',
-      tips: [
-        'Include more visual media.',
-        'Thread your longer thoughts.',
-        'Use 2-3 hashtags max.',
-      ],
-      icon: MessageCircle,
-    },
-    {
-      category: 'Reach Efficiency',
-      score: Math.floor(rand() * 50) + 40,
-      status: 'Needs Improvement',
-      tips: [
-        'Try consistent morning slots.',
-        'Engage with 5 large accounts daily.',
-        'Reply faster.',
-      ],
-      icon: Zap,
-    },
-    {
-      category: 'Audience Health',
-      score: 100 - ghostFollowers,
-      status: ghostFollowers < 15 ? 'Excellent' : 'Good',
-      tips: [
-        'Prune inactive accounts.',
-        'Interact with Verified users.',
-        'Welcome new followers.',
-      ],
-      icon: Target,
-    },
-  ];
+  const ghostFollowers = Math.min(
+    60,
+    Math.max(5, Math.round(35 - engagementRate * 8 + wastedPotential * 0.4)),
+  );
+  const estimatedMediaValue = Math.round((totalImpressions / 1000) * 5.5 * 30);
 
   return {
-    profile,
-    growthHistory,
+    profile: {
+      handle: `@${author.userName}`,
+      name: author.name,
+      followers: author.followers,
+      following: author.following,
+      tweetsCount: author.statusesCount,
+      joinedDate: `Joined ${new Date(author.createdAt).toLocaleDateString('en-US', {
+        month: 'long',
+        year: 'numeric',
+      })}`,
+      bio: author.description || 'No bio provided.',
+      avatarColor: AVATAR_COLORS[Math.floor(Math.random() * AVATAR_COLORS.length)],
+    },
+    growthHistory: buildGrowthHistory(author.followers, trimmedTweets),
     recentTweets,
     engagementRate,
     averageLikes: Math.round(totalLikes / recentTweets.length),
     averageRetweets: Math.round(totalRetweets / recentTweets.length),
-    topHashtags: ['#tech', '#growth', '#building'],
-    insights,
-    estimatedMediaValue: Math.round(emv),
-    wastedPotential,
+    topHashtags: topHashtags.length ? topHashtags : ['#growth', '#buildinpublic'],
+    insights: buildInsights({ heroShare, wastedPotential, engagementRate, ghostFollowers }),
+    estimatedMediaValue,
+    wastedPotential: Math.round(wastedPotential),
     ghostFollowers,
     contentRoi: {
-      hero: heroContent,
-      zombie: wastedPotential,
+      hero: Math.round(heroShare),
+      zombie: Math.round(wastedPotential),
     },
   };
+};
+
+const fetchAnalyticsData = async (handle: string) => {
+  const sanitized = sanitizeHandle(handle);
+  if (!sanitized) {
+    throw new Error('Enter a valid X handle.');
+  }
+
+  // Always use the proxy endpoint to avoid CORS issues
+  const endpoint = `/api/twitter?handle=${encodeURIComponent(sanitized)}`;
+
+  const response = await fetch(endpoint);
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    let errorMsg = 'Unable to analyze that profile right now.';
+    try {
+      const errorJson = JSON.parse(errorText);
+      errorMsg = errorJson.error || errorJson.msg || errorMsg;
+    } catch {
+      errorMsg = errorText || errorMsg;
+    }
+    throw new Error(errorMsg);
+  }
+
+  const payload: TwitterApiResponse = await response.json();
+
+  if (payload.status !== 'success') {
+    throw new Error(payload.msg || 'Unable to analyze that profile right now.');
+  }
+
+  const tweets = payload.data?.tweets ?? [];
+
+  if (!tweets.length) {
+    throw new Error('No recent tweets found for that handle.');
+  }
+
+  return transformTwitterData(tweets);
 };
 
 // --- Components ---
@@ -648,24 +761,25 @@ export default function App() {
   const [data, setData] = useState<AnalyticsData | null>(null);
   const [error, setError] = useState('');
 
-  const handleSearch = (e: React.FormEvent) => {
+  const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!searchTerm.trim()) return;
+    if (!searchTerm.trim()) {
+      setError('Enter a handle to analyze.');
+      return;
+    }
 
     setIsLoading(true);
     setError('');
     setData(null);
 
-    setTimeout(() => {
-      try {
-        const mockData = generateRandomData(searchTerm.replace('@', '').toLowerCase());
-        setData(mockData);
-      } catch (err) {
-        setError('Failed to analyze profile. Please try again.');
-      } finally {
-        setIsLoading(false);
-      }
-    }, 1500);
+    try {
+      const analytics = await fetchAnalyticsData(searchTerm);
+      setData(analytics);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to analyze profile. Please try again.');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
