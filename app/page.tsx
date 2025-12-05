@@ -23,7 +23,7 @@ import {
   CalendarCheck
 } from 'lucide-react';
 
-
+// --- CONFIGURATION ---
 const BOOKING_LINK = "https://calendly.com/mordented21/intro-call/"; 
 
 // --- Types ---
@@ -308,8 +308,9 @@ export default function App() {
       setData(realData);
 
     } catch (err) {
-      console.warn("Backend API Error:", err);
-      setError('Failed to analyze profile. Please ensure the backend is connected and the API Key is valid.');
+      console.warn("Backend API Error", err);
+      // NO FALLBACK - Shows error directly to user
+      setError('Failed to analyze profile. Check API connection.');
     } finally {
       setIsLoading(false);
     }
