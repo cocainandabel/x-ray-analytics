@@ -25,12 +25,16 @@ No ESLint config exists in this repo; there is no lint script in `package.json`.
 
 ### Environment variables
 
-The app needs a twitterapi.io API key to make real API calls. Without it the app loads but analyze requests return `Forbidden`. Create `.env.local` with:
+The app needs a twitterapi.io API key to make real API calls. Without it the app loads but analyze requests return `Forbidden`. The `TWITTERAPI_KEY` secret is provided via Cursor Cloud Secrets. On startup, write `.env.local` from it:
 
+```bash
+cat > .env.local << EOF
+TWITTERAPI_KEY=${TWITTERAPI_KEY}
+VITE_TWITTERAPI_KEY=${TWITTERAPI_KEY}
+EOF
 ```
-TWITTERAPI_KEY=pk_live_xxx        # used by Vercel serverless function
-VITE_TWITTERAPI_KEY=pk_live_xxx   # used by Vite dev proxy (exposes to browser)
-```
+
+Both vars use the same key value — `TWITTERAPI_KEY` is for the Vercel serverless function, `VITE_TWITTERAPI_KEY` is for the Vite dev proxy.
 
 ### Gotchas
 
